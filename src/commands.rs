@@ -1,3 +1,4 @@
+use crate::database::ObjectDatabase;
 use crate::object::Object;
 use crate::repository::Repository;
 
@@ -18,22 +19,16 @@ pub fn init(path: &str) -> Result<()> {
 }
 
 pub fn hash_object(path: Option<&str>, stdin_mode: bool, write: bool) -> Result<()> {
-    let data = if stdin_mode {
-        read_stdin()?
-    } else {
-        let Some(path) = path else {
-            bail!("missing path; use `hash-object <path>` or `hash-object --stdin`");
-        };
-
-        fs::read(path).with_context(|| format!("reading {path}"))?
-    };
+    let data = read_hash_object_input(path, stdin_mode)?;
 
     let object = Object::blob(data);
     let hash = object.hash();
 
     if write {
         let repo = Repository::discover(".")?;
-        write_object(&repo, &object, &hash)?;
+        let database = ObjectDatabase::new(repo);
+
+        database.write(&object)?;
     }
 
     println!("{hash}");
@@ -43,7 +38,9 @@ pub fn hash_object(path: Option<&str>, stdin_mode: bool, write: bool) -> Result<
 
 pub fn cat_file(mode: &str, hash: &str) -> Result<()> {
     let repo = Repository::discover(".")?;
-    let object = read_object(&repo, hash)?;
+    let database = ObjectDatabase::new(repo);
+
+    let object = database.read(hash)?;
 
     match mode {
         "-p" => {
@@ -65,33 +62,16 @@ pub fn cat_file(mode: &str, hash: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn write_object(repo: &Repository, object: &Object, hash: &str) -> Result<()> {
-    let path = repo.object_path(hash)?;
-    let dir = path
-        .parent()
-        .context("object path unexpectedly has no parent directory")?;
-
-    if path.exists() {
-        return Ok(());
+fn read_hash_object_input(path: Option<&str>, stdin_mode: bool) -> Result<Vec<u8>> {
+    if stdin_mode {
+        return read_stdin();
     }
 
-    fs::create_dir_all(dir)
-        .with_context(|| format!("creating object directory {}", dir.display()))?;
+    let Some(path) = path else {
+        bail!("missing path; use `hash-object <path>` or `hash-object --stdin`");
+    };
 
-    let compressed = object.compress()?;
-
-    fs::write(&path, compressed).with_context(|| format!("writing object {}", path.display()))?;
-
-    Ok(())
-}
-
-pub fn read_object(repo: &Repository, hash: &str) -> Result<Object> {
-    let path = repo.object_path(hash)?;
-
-    let compressed =
-        fs::read(&path).with_context(|| format!("reading object {}", path.display()))?;
-
-    Object::decompress(&compressed)
+    fs::read(path).with_context(|| format!("reading {path}"))
 }
 
 fn read_stdin() -> Result<Vec<u8>> {
@@ -103,7 +83,6 @@ fn read_stdin() -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::Object;
     use tempfile::tempdir;
 
     #[test]
@@ -119,60 +98,21 @@ mod tests {
     }
 
     #[test]
-    fn write_object_stores_compressed_object_at_git_object_path() {
+    fn read_hash_object_input_reads_file_contents() {
         let temp = tempdir().unwrap();
-        let repo = Repository::init(temp.path()).unwrap();
+        let file = temp.path().join("hello.txt");
 
-        let object = Object::blob(b"abc".to_vec());
-        let hash = object.hash();
+        std::fs::write(&file, b"hello world").unwrap();
 
-        write_object(&repo, &object, &hash).unwrap();
-        let path = repo.object_path(&hash).unwrap();
+        let data = read_hash_object_input(Some(file.to_str().unwrap()), false).unwrap();
 
-        assert!(path.is_file());
+        assert_eq!(data, b"hello world");
     }
 
     #[test]
-    fn read_object_reads_back_written_object() {
-        let temp = tempdir().unwrap();
-        let repo = Repository::init(temp.path()).unwrap();
+    fn read_hash_object_input_requires_path_when_not_stdin() {
+        let err = read_hash_object_input(None, false).unwrap_err();
 
-        let original = Object::blob(b"abc".to_vec());
-        let hash = original.hash();
-
-        write_object(&repo, &original, &hash).unwrap();
-
-        let read_back = read_object(&repo, &hash).unwrap();
-
-        assert_eq!(read_back.kind, original.kind);
-        assert_eq!(read_back.data, original.data);
-        assert_eq!(read_back.hash(), original.hash());
-    }
-
-    #[test]
-    fn read_object_fails_for_missing_object() {
-        let temp = tempdir().unwrap();
-        let repo = Repository::init(temp.path()).unwrap();
-
-        let hash = "f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f";
-        let err = read_object(&repo, hash).unwrap_err();
-
-        assert!(err.to_string().contains("reading object"));
-    }
-
-    #[test]
-    fn write_object_is_idempotent() {
-        let temp = tempdir().unwrap();
-        let repo = Repository::init(temp.path()).unwrap();
-
-        let object = Object::blob(b"abc".to_vec());
-        let hash = object.hash();
-
-        write_object(&repo, &object, &hash).unwrap();
-        write_object(&repo, &object, &hash).unwrap();
-
-        let read_back = read_object(&repo, &hash).unwrap();
-
-        assert_eq!(read_back.data, b"abc");
+        assert!(err.to_string().contains("missing path"));
     }
 }
