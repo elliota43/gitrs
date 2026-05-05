@@ -8,18 +8,21 @@ use std::io::{Read, Write};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectKind {
     Blob,
+    Tree,
 }
 
 impl ObjectKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             ObjectKind::Blob => "blob",
+            ObjectKind::Tree => "tree",
         }
     }
 
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
             "blob" => Ok(ObjectKind::Blob),
+            "tree" => Ok(ObjectKind::Tree),
             _ => bail!("unsupported object type: {s}"),
         }
     }
@@ -35,6 +38,13 @@ impl Object {
     pub fn blob(data: Vec<u8>) -> Self {
         Self {
             kind: ObjectKind::Blob,
+            data,
+        }
+    }
+
+    pub fn tree(data: Vec<u8>) -> Self {
+        Self {
+            kind: ObjectKind::Tree,
             data,
         }
     }
@@ -201,5 +211,56 @@ mod tests {
 
         assert_eq!(kind, ObjectKind::Blob);
         assert_eq!(kind.as_str(), "blob");
+    }
+
+    #[test]
+    fn tree_object_serializes_with_git_header() {
+        let tree_data = b"100644 hello.txt\0abcdefghijklmnopqrst".to_vec();
+
+        let object = Object::tree(tree_data.clone());
+
+        let serialized = object.serialize();
+
+        let mut expected = Vec::new();
+
+        expected.extend_from_slice(format!("tree {}\0", tree_data.len()).as_bytes());
+        expected.extend_from_slice(&tree_data);
+
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn object_deserializes_valid_tree() {
+        let tree_data = b"100644 hello.txt\0abcdefghijklmnopqrst";
+
+        let mut raw = Vec::new();
+        raw.extend_from_slice(format!("tree {}\0", tree_data.len()).as_bytes());
+        raw.extend_from_slice(tree_data);
+
+        let object = Object::deserialize(&raw).unwrap();
+
+        assert_eq!(object.kind, ObjectKind::Tree);
+        assert_eq!(object.data, tree_data);
+    }
+
+    #[test]
+    fn tree_object_compress_and_decompress_round_trip() {
+        let tree_data = b"100644 hello.txt\0abcdefghijklmnopqrst".to_vec();
+        let original = Object::tree(tree_data);
+
+        let compressed = original.compress().unwrap();
+        let decoded = Object::decompress(&compressed).unwrap();
+
+        assert_eq!(decoded.kind, ObjectKind::Tree);
+        assert_eq!(decoded.data, original.data);
+        assert_eq!(decoded.hash(), original.hash());
+    }
+
+    #[test]
+    fn object_kind_supports_tree() {
+        let kind = ObjectKind::from_str("tree").unwrap();
+
+        assert_eq!(kind, ObjectKind::Tree);
+        assert_eq!(kind.as_str(), "tree");
     }
 }

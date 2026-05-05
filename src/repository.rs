@@ -66,6 +66,10 @@ impl Repository {
 
         Ok(self.gitdir.join("objects").join(dir).join(file))
     }
+
+    pub fn index_path(&self) -> PathBuf {
+        self.gitdir.join("index")
+    }
 }
 
 #[cfg(test)]

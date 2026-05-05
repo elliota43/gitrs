@@ -1,7 +1,9 @@
 mod commands;
 mod database;
+mod index;
 mod object;
 mod repository;
+mod tree;
 
 use anyhow::{Result, bail};
 use std::env;
@@ -48,8 +50,32 @@ fn main() -> Result<()> {
             commands::cat_file(&mode, &hash)?;
         }
 
+        "ls-tree" => {
+            let Some(hash) = args.next() else {
+                anyhow::bail!("missing tree hash");
+            };
+
+            commands::ls_tree(&hash)?;
+        }
+
         _ => {
             bail!("unknown command: {command}");
+        }
+
+        "update-index" => {
+            let Some(flag) = args.next() else {
+                anyhow::bail!("missing update-index flag");
+            };
+
+            if flag != "--add" {
+                anyhow::bail!("only update-index --add is supported at the moment");
+            }
+
+            let Some(path) = args.next() else {
+                anyhow::bail!("missing path");
+            };
+
+            commands::update_index_add(&path)?;
         }
     }
     Ok(())

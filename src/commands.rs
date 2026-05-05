@@ -1,6 +1,8 @@
 use crate::database::ObjectDatabase;
+use crate::index::{Index, IndexEntry};
 use crate::object::Object;
 use crate::repository::Repository;
+use crate::tree::{Tree, hash_to_hex};
 
 use anyhow::{Context, Result, bail};
 use std::fs;
@@ -80,6 +82,68 @@ fn read_stdin() -> Result<Vec<u8>> {
     Ok(data)
 }
 
+fn kind_for_mode(mode: &str) -> &'static str {
+    match mode {
+        "40000" => "tree",
+        _ => "blob",
+    }
+}
+
+pub fn ls_tree(hash: &str) -> Result<()> {
+    let repo = Repository::discover(".")?;
+    let database = ObjectDatabase::new(repo);
+
+    let object = database.read(hash)?;
+
+    if object.kind != crate::object::ObjectKind::Tree {
+        bail!("object {hash} is not a tree");
+    }
+
+    let tree = Tree::parse(&object.data)?;
+
+    print!("{}", format_ls_tree(&tree));
+
+    Ok(())
+}
+
+pub fn update_index_add(path: &str) -> Result<()> {
+    let repo = Repository::discover(".")?;
+    let database = ObjectDatabase::new(repo.clone());
+
+    let full_path = repo.worktree.join(path);
+    let data = fs::read(&full_path).with_context(|| format!("reading {}", full_path.display()))?;
+
+    let object = Object::blob(data);
+    let hash = database.write(&object)?;
+
+    let mut index = Index::read(repo.index_path())?;
+
+    index.add_or_replace(IndexEntry {
+        mode: "100644".to_string(),
+        hash,
+        path: path.into(),
+    });
+
+    index.write(repo.index_path())?;
+
+    Ok(())
+}
+
+pub(crate) fn format_ls_tree(tree: &Tree) -> String {
+    let mut out = String::new();
+
+    for entry in &tree.entries {
+        out.push_str(&format!(
+            "{} {} {}\t{}\n",
+            entry.mode,
+            kind_for_mode(&entry.mode),
+            hash_to_hex(&entry.hash),
+            entry.name
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +178,69 @@ mod tests {
         let err = read_hash_object_input(None, false).unwrap_err();
 
         assert!(err.to_string().contains("missing path"));
+    }
+
+    #[test]
+    fn format_ls_tree_formats_blob_entry() {
+        use crate::tree::{Tree, TreeEntry, hex_to_hash};
+
+        let tree = Tree::new(vec![TreeEntry {
+            mode: "100644".to_string(),
+            name: "hello.txt".to_string(),
+            hash: hex_to_hash("f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f").unwrap(),
+        }]);
+
+        let out = format_ls_tree(&tree);
+
+        assert_eq!(
+            out,
+            "100644 blob f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f\thello.txt\n"
+        );
+    }
+
+    #[test]
+    fn format_ls_tree_formats_tree_entry() {
+        use crate::tree::{Tree, TreeEntry, hex_to_hash};
+
+        let tree = Tree::new(vec![TreeEntry {
+            mode: "40000".to_string(),
+            name: "src".to_string(),
+            hash: hex_to_hash("a9993e364706816aba3e25717850c26c9cd0d89d").unwrap(),
+        }]);
+
+        let out = format_ls_tree(&tree);
+
+        assert_eq!(
+            out,
+            "40000 tree a9993e364706816aba3e25717850c26c9cd0d89d\tsrc\n"
+        );
+    }
+
+    #[test]
+    fn format_ls_tree_formats_multiple_entries() {
+        use crate::tree::{Tree, TreeEntry, hex_to_hash};
+
+        let tree = Tree::new(vec![
+            TreeEntry {
+                mode: "100644".to_string(),
+                name: "README.md".to_string(),
+                hash: hex_to_hash("ce013625030ba8dba906f756967f9e9ca394464a").unwrap(),
+            },
+            TreeEntry {
+                mode: "40000".to_string(),
+                name: "src".to_string(),
+                hash: hex_to_hash("a9993e364706816aba3e25717850c26c9cd0d89d").unwrap(),
+            },
+        ]);
+
+        let out = format_ls_tree(&tree);
+
+        assert_eq!(
+            out,
+            "\
+100644 blob ce013625030ba8dba906f756967f9e9ca394464a\tREADME.md
+40000 tree a9993e364706816aba3e25717850c26c9cd0d89d\tsrc
+"
+        );
     }
 }

@@ -151,4 +151,51 @@ mod tests {
 
         assert_eq!(read_back.data, b"abc");
     }
+
+    #[test]
+    fn write_and_read_tree_object() {
+        use crate::tree::{Tree, TreeEntry, hex_to_hash};
+
+        let temp = tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+        let database = ObjectDatabase::new(repo);
+
+        let tree = Tree::new(vec![TreeEntry {
+            mode: "100644".to_string(),
+            name: "hello.txt".to_string(),
+            hash: hex_to_hash("f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f").unwrap(),
+        }]);
+
+        let object = Object::tree(tree.serialize());
+
+        let hash = database.write(&object).unwrap();
+        let read_back = database.read(&hash).unwrap();
+
+        assert_eq!(read_back.kind, crate::object::ObjectKind::Tree);
+        let parsed = Tree::parse(&read_back.data).unwrap();
+
+        assert_eq!(parsed, tree);
+    }
+
+    #[test]
+    fn tree_object_hash_is_stable() {
+        use crate::tree::{Tree, TreeEntry, hex_to_hash};
+
+        let temp = tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+        let database = ObjectDatabase::new(repo);
+
+        let tree = Tree::new(vec![TreeEntry {
+            mode: "100644".to_string(),
+            name: "hello.txt".to_string(),
+            hash: hex_to_hash("f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f").unwrap(),
+        }]);
+
+        let object = Object::tree(tree.serialize());
+
+        let hash1 = database.write(&object).unwrap();
+        let hash2 = database.write(&object).unwrap();
+
+        assert_eq!(hash1, hash2);
+    }
 }
